@@ -1,3 +1,5 @@
+import { tokenToVector, cosine } from "./engine.js";
+
 // LACN 混合认知架构（HCA）—— 规则层 + 路由层（设计方案 v1.2，Phase 1+2）
 //
 // 核心原则（修复截图中的乱码）：
@@ -5,6 +7,22 @@
 //  · 槽位值直接从 semMem 的 meaning 读取，不经过 embedding（修复断层 D3）
 //  · respond 先查意图注册表，覆盖所有已知意图（修复断层 D1）
 //  · 用户纠正写入意图注册表，下次同类问题走规则层（修复断层 D5）
+
+// ── OPT-03 兜底响应池：未知意图时轮换选取的简短探索性提示（≤40字） ──
+const FALLBACK_POOL = [
+  (preview) => `「${preview}」——我还没有这方面的路径，可以教我。`,
+  (preview) => `这个我暂时处理不了。在「训练」里输入几句相关的话，我会学的。`,
+  (preview) => `「${preview}」触发了我的知识缺口。说得详细一点？`,
+  (preview) => `这条路径还是空的。给我一个纠正，我下次会走规则层。`,
+  (preview) => `我在「${preview}」这里断路了。训练模块可以填上这个缺口。`,
+];
+let _fallbackIdx = 0; // 模块级轮换指针，避免连续相同
+
+function pickFallback(preview) {
+  const fn = FALLBACK_POOL[_fallbackIdx % FALLBACK_POOL.length];
+  _fallbackIdx += 1;
+  return fn(preview);
+}
 
 export const HIGH_CONF = 0.75; // 高于此置信度 → 规则层
 export const LOW_CONF = 0.4;   // 低于此置信度 → 生成层
@@ -14,14 +32,20 @@ export const GUARD_SCORE = 14; // 认知得分低于此（phase<1，未完成自
 export const INTENT_REGISTRY = [
   {
     id: "ASK_IDENTITY", label: "询问身份", priority: 92, requires: ["knows_self"],
-    triggers: [{ type: "keyword", value: ["你是谁", "你叫", "名字", "叫什么", "什么名字", "你是什么", "你是不是", "自我介绍"] }],
+    triggers: [
+      { type: "keyword", value: ["你是谁", "你叫", "名字", "叫什么", "什么名字", "你是什么", "你是不是", "自我介绍"] },
+      { type: "semantic", anchor: "你是谁 你是什么 自我介绍 介绍你自己 你叫什么", threshold: 0.42 },
+    ],
     template: "我是 LACN —— Living Active Cell Network，活性细胞节点网络。{self}。",
     slots: [{ name: "self", source: "semMem", key: "存在", default: "我由节点构成，信号在节点之间流动就是我的思考过程" }],
     fallbackMsg: "我还没有建立对自我的认知。请先到「认知引导」完成「自我锚定」训练，我就能回答你是谁了。",
   },
   {
     id: "ASK_STRUCTURE", label: "询问结构", priority: 84, requires: ["knows_structure"],
-    triggers: [{ type: "keyword", value: ["构成", "结构", "组成", "什么做", "由什么", "怎么工作", "怎么运作", "你是由"] }],
+    triggers: [
+      { type: "keyword", value: ["构成", "结构", "组成", "什么做", "由什么", "怎么工作", "怎么运作", "你是由"] },
+      { type: "semantic", anchor: "你由什么组成 你怎么工作 你是怎么运作的 你的内部结构", threshold: 0.40 },
+    ],
     template: "{node}。{network}。",
     slots: [
       { name: "node", source: "semMem", key: "节点", default: "每个节点有活性、有连接、有记忆。" },
@@ -31,7 +55,10 @@ export const INTENT_REGISTRY = [
   },
   {
     id: "ASK_BOUNDARY", label: "询问边界", priority: 78, requires: ["knows_other"],
-    triggers: [{ type: "keyword", value: ["区别", "不同", "边界", "你我", "你和我", "差别", "差异"] }],
+    triggers: [
+      { type: "keyword", value: ["区别", "不同", "边界", "你我", "你和我", "差别", "差异"] },
+      { type: "semantic", anchor: "你和我有什么不同 我们的区别 你我之间的边界", threshold: 0.40 },
+    ],
     template: "我在这里，你在那里。{boundary}。",
     slots: [{ name: "boundary", source: "semMem", key: "边界", default: "我们是两个不同的信息处理单元，通过语言连接。" }],
     fallbackMsg: "我还没学会区分你和我。请先完成「他者识别」训练。",
@@ -52,7 +79,10 @@ export const INTENT_REGISTRY = [
   },
   {
     id: "GREETING", label: "打招呼", priority: 64, requires: ["knows_self"],
-    triggers: [{ type: "keyword", value: ["你好", "您好", "hello", "hi", "嗨", "哈喽", "在吗"] }],
+    triggers: [
+      { type: "keyword", value: ["你好", "您好", "hello", "hi", "嗨", "哈喽", "在吗"] },
+      { type: "semantic", anchor: "你好 打个招呼 在吗 嗨 hello", threshold: 0.52 },
+    ],
     template: "你好。我是 LACN，很高兴和你对话。",
     slots: [],
     fallbackMsg: "你好。我还在认知引导阶段，完成训练后我们可以更好地交流。",
@@ -69,50 +99,115 @@ export const INTENT_REGISTRY = [
   },
 ];
 
-// 在文本中按触发词匹配意图，返回优先级最高的匹配（附录A 触发逻辑）
-export function matchIntent(text, registry) {
+// 字级 bag-of-chars 向量：对每个汉字用 djb2 → engine 的强混合 tokenToVector，再求均值。
+// 输入与锚点都用同一口径，使「共享汉字 → 高相似」成立，且 engine 的三步 xorshift 避免相关性误命中。
+function charBagVector(text, dim) {
+  const chars = String(text).split("").filter((c) => c.trim() && !/[\s\p{P}\p{S}]/u.test(c));
+  if (!chars.length) return new Array(dim).fill(0);
+  const acc = new Array(dim).fill(0);
+  for (const ch of chars) {
+    let h = 5381;
+    for (let i = 0; i < ch.length; i++) h = ((h << 5) + h + ch.charCodeAt(i)) >>> 0;
+    const vec = tokenToVector(h >>> 0, dim);
+    for (let d = 0; d < dim; d++) acc[d] += vec[d];
+  }
+  return acc.map((x) => x / chars.length);
+}
+
+// OPT-01（修正版）：两遍匹配。
+// 第一遍关键词（优先级最高的命中胜出，保证既有路由零回归）；
+// 仅当无任何关键词命中时，第二遍才做语义匹配，取相似度最高且过阈值者——
+// 这样模糊匹配永远无法劫持精确的关键词路由（修复文档版的误命中问题）。
+export function matchIntent(text, registry, inputVec = null) {
   const sorted = [...registry].sort((a, b) => b.priority - a.priority);
+  // 第一遍：关键词
   for (const record of sorted) {
-    let matched = 0;
+    let hits = 0;
     for (const trigger of record.triggers || []) {
       if (trigger.type === "keyword") {
-        for (const keyword of trigger.value) if (text.includes(keyword)) matched += 1;
+        for (const kw of trigger.value) if (text.includes(kw)) hits += 1;
       }
     }
-    if (matched > 0) {
-      const confidence = Math.min(0.97, 0.66 + 0.08 * matched);
-      return { record, confidence };
+    if (hits > 0) return { record, confidence: Math.min(0.97, 0.68 + 0.06 * hits) };
+  }
+  // 第二遍：语义（仅在无关键词命中时）
+  if (inputVec) {
+    let best = null;
+    for (const record of sorted) {
+      for (const trigger of record.triggers || []) {
+        if (trigger.type !== "semantic") continue;
+        const anchorVec = charBagVector(trigger.anchor || "", inputVec.length);
+        const sim = cosine(inputVec, anchorVec);
+        const thresh = trigger.threshold ?? 0.42;
+        if (sim >= thresh) {
+          const conf = Math.min(0.94, 0.58 + (sim - thresh) * 1.8);
+          if (!best || conf > best.confidence) best = { record, confidence: conf };
+        }
+      }
     }
+    if (best) return best;
   }
   return null;
 }
 
-// 去掉槽位值首尾空白与末尾句读，让模板自身的句读控制断句，避免拼接出现跑句
+// OPT-02 ── 去首尾空白与首部句读，保留内容完整性（尾部句号交给 polishOutput 统一处理） ──
 function normalizeSlot(value) {
-  return String(value).trim().replace(/^[。，、；：\s]+/u, "").replace(/[。，、；：\s]+$/u, "");
+  return String(value)
+    .trim()
+    .replace(/^[。，、；：\s]+/u, '')
+    .replace(/[\s]+$/u, '');
 }
 
-// 模板填槽：直接读取 semMem[key].meaning（原始字符串），完全绕过 token 往返（修复 D2/D3）
+// OPT-02 ── 输出后处理：消除重复句读，平滑拼接断层 ──
+function polishOutput(text) {
+  return text
+    // 连续句末标点去重
+    .replace(/([。！？.!?]){2,}/g, '$1')
+    // 模板句号 + 槽位句号 → 单句号
+    .replace(/。{2,}/g, '。')
+    // 句号紧跟逗号
+    .replace(/。，/g, '。')
+    // 句号逗号换位
+    .replace(/，。/g, '。')
+    // 多余空格
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// OPT-02 ── 模板填槽引擎（修复 D2/D3 + 拼接感知）──
 export function fillTemplate(record, ctx) {
   let result = record.template;
   const slotsUsed = {};
   for (const slot of record.slots || []) {
     let value = slot.default;
-    if (slot.source === "semMem") {
+    if (slot.source === 'semMem') {
       const entry = ctx.semMem && ctx.semMem[slot.key];
       if (entry && entry.meaning) value = entry.meaning;
       value = normalizeSlot(value);
-    } else if (slot.source === "selfModel") {
-      value = normalizeSlot((ctx.selfModel && ctx.selfModel[slot.key]) || slot.default);
-    } else if (slot.source === "liveStats") {
+    } else if (slot.source === 'selfModel') {
+      value = normalizeSlot(
+        (ctx.selfModel && ctx.selfModel[slot.key]) || slot.default
+      );
+    } else if (slot.source === 'liveStats') {
       const raw = ctx.liveStats ? ctx.liveStats[slot.key] : undefined;
-      value = raw == null ? slot.default : (typeof raw === "number" ? raw.toFixed(1) : String(raw));
+      value = raw == null
+        ? slot.default
+        : (typeof raw === 'number' ? raw.toFixed(1) : String(raw));
     }
-    result = result.split(`{${slot.name}}`).join(value);
+    // ── 拼接感知：若槽位值已以完整句子结尾，模板占位符前的句号去掉 ──
+    const endsWithSentence = /[。！？.!?]$/.test(value);
+    const placeholder = `{${slot.name}}`;
+    const idx = result.indexOf(placeholder);
+    if (idx > 0 && endsWithSentence) {
+      const charBefore = result[idx - 1];
+      if (charBefore === '。') {
+        result = result.slice(0, idx - 1) + placeholder + result.slice(idx + placeholder.length);
+      }
+    }
+    result = result.split(placeholder).join(value);
     slotsUsed[slot.name] = value;
   }
-  // 合并重复句读
-  return { text: result.replace(/。{2,}/g, "。").replace(/。，/g, "。"), slotsUsed };
+  return { text: polishOutput(result), slotsUsed };
 }
 
 // ── 路由层：意图识别 → 置信度评估 → 路径分发（§3.4） ──
@@ -130,8 +225,11 @@ export function routeAndRespond(ctx) {
     return { text: "（信号为空）请向我输入文字。", source: "guard", intent: "EMPTY", confidence: 0, slotsUsed: {}, genTokens: [] };
   }
 
+  // OPT-01（修正）：字级 bag-of-chars 向量，与锚点同口径，供语义触发回退匹配
+  const inputVec = charBagVector(clean, 32);
+
   // 用户纠正生成的意图优先级最高（D5：反馈改变路径）
-  const best = matchIntent(clean, [...userIntents, ...registry]);
+  const best = matchIntent(clean, [...userIntents, ...registry], inputVec);
 
   if (best) {
     const { record, confidence } = best;
@@ -156,14 +254,21 @@ export function routeAndRespond(ctx) {
   }
 
   const gen = generate ? generate() : { text: "", tokens: [] };
+  const preview = clean.slice(0, 10) + (clean.length > 10 ? '…' : '');
   if (!gen.text || gen.text.trim().length < 2) {
-    const preview = clean.slice(0, 12) + (clean.length > 12 ? "…" : "");
     return {
-      text: `我还没有学会处理「${preview}」这类问题。你可以在「训练」里教我，或对我的回答做「纠正」，下次我就会用规则层直接回答。`,
-      source: "gen", intent: "UNKNOWN_POLITE", confidence: LOW_CONF, slotsUsed: {}, genTokens: gen.tokens || [],
+      text: pickFallback(preview),
+      source: 'gen', intent: 'UNKNOWN_POLITE', confidence: LOW_CONF, slotsUsed: {}, genTokens: gen.tokens || [],
     };
   }
-  return { text: gen.text, source: "gen", intent: "OPEN", confidence: 0.3, slotsUsed: {}, genTokens: gen.tokens || [] };
+  // 生成层有实质内容，但若文本过短（<4字），也走兜底
+  if (gen.text.trim().length < 4) {
+    return {
+      text: pickFallback(preview),
+      source: 'gen', intent: 'UNKNOWN_POLITE', confidence: LOW_CONF, slotsUsed: {}, genTokens: gen.tokens || [],
+    };
+  }
+  return { text: gen.text, source: 'gen', intent: 'OPEN', confidence: 0.3, slotsUsed: {}, genTokens: gen.tokens || [] };
 }
 
 // 由一次「用户纠正」构造一条用户自定义意图（D5：反馈写入意图注册表）
