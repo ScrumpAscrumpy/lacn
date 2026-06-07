@@ -1,0 +1,106 @@
+/* ===========================================================================
+   WorldLab 面板样式 —— 深色科幻主题（与现有 styles.css 的变量对齐）
+   若你的 styles.css 已定义 --bg / --mint / --amber / --cyan，会自动复用；
+   下面的 fallback 值用于独立预览。
+   =========================================================================== */
+.wl-root {
+  --wl-bg: var(--bg, #071013);
+  --wl-panel: #0c1820;
+  --wl-line: #1b2c36;
+  --wl-mint: var(--mint, #7df9c0);
+  --wl-amber: var(--amber, #ffb14a);
+  --wl-cyan: var(--cyan, #59daff);
+  --wl-text: #cfe8e4;
+  --wl-dim: #6f8a88;
+  color: var(--wl-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  padding: 18px;
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.wl-title { font-size: 18px; font-weight: 650; color: var(--wl-mint); letter-spacing: .5px; }
+.wl-sub { font-size: 12px; color: var(--wl-dim); margin-top: 3px; }
+.wl-controls { display: flex; gap: 8px; }
+
+.wl-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--wl-panel); color: var(--wl-text);
+  border: 1px solid var(--wl-line); border-radius: 8px;
+  padding: 7px 12px; font-size: 13px; cursor: pointer; transition: .15s;
+}
+.wl-btn:hover { border-color: var(--wl-mint); color: var(--wl-mint); }
+.wl-btn.sm { padding: 5px 10px; font-size: 12px; }
+
+.wl-card { background: var(--wl-panel); border: 1px solid var(--wl-line); border-radius: 12px; padding: 14px; }
+.wl-card-h { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--wl-text); margin-bottom: 10px; }
+.wl-hint { font-size: 11px; color: var(--wl-dim); }
+.wl-note { font-size: 11px; color: var(--wl-dim); line-height: 1.6; margin-top: 8px; }
+
+/* —— 环境场 —— */
+.wl-field {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 150px; padding: 8px;
+  background: #050d11; border-radius: 8px; position: relative;
+}
+.wl-cell { position: relative; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
+.wl-cell:hover { outline: 1px solid var(--wl-line); outline-offset: 1px; }
+.wl-bar { width: 100%; border-radius: 3px 3px 0 0; transition: height .08s linear; }
+.wl-ghost {
+  position: absolute; left: -1px; right: -1px; height: 0;
+  border-top: 1.5px dashed var(--wl-cyan); opacity: .9; pointer-events: none;
+}
+.wl-poke { position: absolute; inset: 0; border: 1.5px solid var(--wl-amber); border-radius: 3px; animation: wl-pulse .6s ease-out; }
+@keyframes wl-pulse { from { opacity: 1; } to { opacity: 0; } }
+.wl-legend { display: flex; gap: 16px; font-size: 11px; color: var(--wl-dim); margin-top: 8px; align-items: center; }
+.wl-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.wl-ghost-dot { display: inline-block; width: 14px; border-top: 1.5px dashed var(--wl-cyan); margin-right: 5px; vertical-align: 3px; }
+
+/* —— 指标 —— */
+.wl-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.wl-metric { background: var(--wl-panel); border: 1px solid var(--wl-line); border-radius: 10px; padding: 12px; }
+.wl-metric-label { font-size: 11px; color: var(--wl-dim); }
+.wl-metric-value { font-size: 19px; font-weight: 650; color: var(--wl-mint); margin: 4px 0; font-variant-numeric: tabular-nums; }
+.wl-metric-sub { font-size: 10px; color: var(--wl-dim); }
+
+/* —— 曲线 —— */
+.wl-spark { width: 100%; height: 70px; }
+.wl-spark-empty { font-size: 12px; color: var(--wl-dim); padding: 24px 0; text-align: center; }
+
+/* —— 动作控制行 —— */
+.wl-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; color: var(--wl-text); }
+.wl-lab { font-size: 12px; color: var(--wl-text); white-space: nowrap; }
+.wl-range { flex: 1; accent-color: var(--wl-mint); }
+.wl-toggle { background: #0a141a; border: 1px solid var(--wl-line); color: var(--wl-dim); border-radius: 6px; padding: 4px 14px; font-size: 12px; cursor: pointer; }
+.wl-toggle.on { border-color: var(--wl-amber); color: var(--wl-amber); }
+
+/* —— 节点种群 —— */
+.wl-pop { display: flex; flex-wrap: wrap; gap: 3px; align-items: flex-end; height: 90px; padding: 6px; background: #050d11; border-radius: 8px; overflow: hidden; }
+.wl-node { width: 10px; height: 100%; display: flex; align-items: flex-end; }
+.wl-node-bar { width: 100%; border-radius: 2px 2px 0 0; transition: height .12s; }
+.wl-node.frozen { opacity: .85; }
+
+/* —— 泛化测试 —— */
+.wl-gen { display: flex; flex-direction: column; gap: 8px; }
+.wl-gen-row { display: grid; grid-template-columns: 120px 1fr 64px; align-items: center; gap: 10px; font-size: 12px; }
+.wl-gen-bar { height: 14px; background: #0a141a; border-radius: 7px; overflow: hidden; }
+.wl-gen-bar > div { height: 100%; border-radius: 7px; transition: width .3s; }
+.wl-gen-row b { text-align: right; font-variant-numeric: tabular-nums; color: var(--wl-text); }
+
+/* —— 实指 —— */
+.wl-input { flex: 1; background: #0a141a; border: 1px solid var(--wl-line); color: var(--wl-text); border-radius: 7px; padding: 7px 10px; font-size: 13px; }
+.wl-input:focus { outline: none; border-color: var(--wl-mint); }
+.wl-recog { margin-top: 10px; font-size: 12px; color: var(--wl-cyan); }
+.wl-symbols { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.wl-symbol { background: #0a141a; border: 1px solid var(--wl-line); border-radius: 8px; padding: 6px 8px; }
+.wl-symbol-name { font-size: 12px; color: var(--wl-amber); }
+.wl-symbol-strip { display: flex; gap: 1px; margin-top: 5px; }
+.wl-symbol-strip > i { width: 6px; height: 14px; border-radius: 1px; }
+
+@media (max-width: 640px) {
+  .wl-metrics { grid-template-columns: repeat(2, 1fr); }
+  .wl-gen-row { grid-template-columns: 90px 1fr 56px; }
+}

@@ -9,6 +9,7 @@ import {
   Database,
   FileSearch,
   Gauge,
+  Globe,
   GraduationCap,
   History,
   MessageSquare,
@@ -57,6 +58,8 @@ import {
 } from "./cognitive.js";
 import { MANUAL } from "./manual.js";
 import { routeAndRespond, buildUserIntent } from "./hca.js";
+import WorldLab from "./WorldLab.jsx";
+import "./worldlab.css";
 
 const DEFAULT_CONFIG = {
   INITIAL_NODE_COUNT: 48,
@@ -108,6 +111,7 @@ const SEED_CORPUS = [
 ];
 
 const PANEL_ITEMS = [
+  ["world", "世界", Globe],
   ["bootstrap", "认知引导", GraduationCap],
   ["training", "训练", Sparkles],
   ["dialogue", "对话", MessageSquare],
@@ -607,7 +611,7 @@ export default function App() {
   const [nodes, setNodes] = useState(() => createNetwork(DEFAULT_CONFIG));
   const [tick, setTick] = useState(0);
   const [running, setRunning] = useState(false);
-  const [panel, setPanel] = useState("bootstrap");
+  const [panel, setPanel] = useState("world");
   const [signals, setSignals] = useState([]);
   const [activeSignals, setActiveSignals] = useState([]);
   const [events, setEvents] = useState([]);
@@ -1429,6 +1433,8 @@ export default function App() {
         </nav>
 
         <section className="panel-stage">
+          {panel === "world" && <div style={{ height: "100%", overflowY: "auto" }}><WorldLab /></div>}
+
           {panel === "bootstrap" && (
             <BootstrapPanel
               cognitiveScore={cognitiveScore}
